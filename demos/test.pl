@@ -21,8 +21,10 @@ my $dbh = DBI->connect(
 		or die ("Can't connect to database:", $! );
 
 END{
-	$dbh->do('DROP TABLE food');
-	$dbh->disconnect; 
+	if(defined $dbh) {
+		$dbh->do('DROP TABLE food');
+		$dbh->disconnect; 
+	}
 }
 
 while(<DATA>)
