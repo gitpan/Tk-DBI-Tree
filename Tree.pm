@@ -2,8 +2,8 @@ package Tk::DBI::Tree;
 #------------------------------------------------
 # automagically updated versioning variables -- CVS modifies these!
 #------------------------------------------------
-our $Revision           = '$Revision: 1.4 $';
-our $CheckinDate        = '$Date: 2003/05/11 16:33:47 $';
+our $Revision           = '$Revision: 1.7 $';
+our $CheckinDate        = '$Date: 2003/06/16 12:58:01 $';
 our $CheckinUser        = '$Author: xpix $';
 # we need to clean these up right here
 $Revision               =~ s/^\$\S+:\s*(.*?)\s*\$$/$1/sx;
@@ -71,9 +71,16 @@ sub Populate {
 	$specs{infozoom}	= [qw/METHOD infozoom 		InfoZoom/,		undef];
 	$specs{color_all}	= [qw/METHOD color_all 		Color_All/, 		undef];
 	$specs{get_id}		= [qw/METHOD get_id 		Get_Id/, 		undef];
-	
+
+	$specs{neu}		= [qw/METHOD neu 		Neu/, 			undef];
+	$specs{move}		= [qw/METHOD move 		Move/, 			undef];
+	$specs{copy}		= [qw/METHOD copy 		Copy/, 			undef];
+	$specs{dele}		= [qw/METHOD dele 		Dele/, 			undef];
+	$specs{refresh_id}	= [qw/METHOD refresh_id		Refresh_Id/, 		undef];
         $obj->ConfigSpecs(%specs);
 
+
+	$obj->{last_refresh_time} = 1;
 
 	# Bildet den Tree in einem Array ab
 	$obj->{dbtree} = DBIx::Tree->new( 
@@ -89,7 +96,6 @@ sub Populate {
 		-columns	=> scalar @{$obj->{fields}} + 1,
 		-header		=> 1,
 		-separator	=> ':',
-		-selectmode	=> 'single',
 	)->pack(-expand => 1,
 		-fill => 'both');
 
@@ -100,10 +106,118 @@ sub Populate {
 
 # Class private methods;
 # ------------------------------------------
+sub refresh_id {
+# ------------------------------------------
+	my $obj = shift || return error('No Object');
+	my $path 	= shift || return error('No Id');
+	my $to_parent_id 	= shift || return error('No To Id');
+	my $data = shift || return error('No Data');
+
+	my ($parent_path, $id) = ($1, $2) if($path =~/(.+)\:(\d+)/);
+	$obj->dele($path);
+	$obj->neu($id, $parent_path, $data);
+}
+
+# ------------------------------------------
+sub neu {
+# ------------------------------------------
+	my $obj = shift || return error('No Object');
+	my $id	= shift || return error('No Id');
+	my $to_parent 	= shift || return error('No To Id');
+	my $data 	= shift || return error('No Data');
+	$data->{$obj->{idx}} = $id 
+		unless $data->{$obj->{idx}};
+
+	my $new_path = sprintf('%s:%d', $to_parent, $id);
+
+	$obj->{tree}->add($new_path, 
+		-itemtype	=> 'imagetext', 
+		-data 		=> $data, 
+		-text 		=> $obj->parse_text($data->{$obj->{textcolumn}}, $obj->{textcolumn}),
+		-style 		=> $obj->{normal},
+		 );
+
+	&{$obj->{entry_create_cb}}($obj->{tree}, $new_path, $data)
+		if(defined $obj->{entry_create_cb} and ref $obj->{entry_create_cb} eq 'CODE');
+
+	my $c = 1;
+	foreach my $field (@{$obj->{fields}}) {
+		$obj->{tree}->itemCreate( $new_path, $c++, 
+			-text => $obj->parse_text($data->{$field}, $field),
+			-style => $obj->{normal},
+		);
+	}
+	push(@{$obj->{ListOfAllEntries}}, $new_path);
+	return $new_path;
+}
+
+# ------------------------------------------
+sub move {
+# ------------------------------------------
+	my $obj = shift || return error('No Object');
+	my $from_entry 	= shift || return error('No From Id');
+	my $to_parent 	= shift || return error('No To Id');
+	my $data 	= shift;
+
+	my $to_path = $obj->{Paths}->{$to_parent};
+	my $id = (split( /:/, $from_entry ))[-1];
+
+	my $nid = $obj->neu($id, $to_path, $data);
+	my $did = $obj->dele($from_entry);
+	return $id;
+}
+
+# ------------------------------------------
+sub copy {
+# ------------------------------------------
+	my $obj = shift || return error('No Object');
+	my $from_entry 	= shift || return error('No From Id');
+	my $to_parent 	= shift || return error('No To Id');
+	my $data 	= shift;
+
+	my $id = (split( /:/, $from_entry ))[-1];
+	my $to_entry = sprintf('%s:%d', $obj->{Paths}->{$to_parent}, $id);
+
+	my $hl = $obj->{tree};
+
+	my @entry_args;
+	foreach ($hl->entryconfigure($from_entry)) {
+		push @entry_args, $_->[0] => $_->[4] if defined $_->[4];
+    	}
+
+	$hl->add($to_entry, @entry_args);
+	$hl->entryconfigure($to_entry, -data => $data) 
+		if defined $data;
+
+	foreach my $col (1 .. $hl->cget(-columns)-1) {
+ 		my @item_args;
+ 		foreach ($hl->itemConfigure($from_entry, $col)) {
+     			push @item_args, $_->[0] => $_->[4] if defined $_->[4];
+ 		} 
+ 		$hl->itemCreate($to_entry, $col, @item_args);
+    	}
+	$obj->refresh_id($to_entry, $to_parent, $data);
+	push(@{$obj->{ListOfAllEntries}}, $to_entry);
+	return $to_entry;
+}
+
+# ------------------------------------------
+sub dele {
+# ------------------------------------------
+	my $obj = shift || return error('No Object');
+	my $id = shift || return error('No Id');
+
+	$obj->{tree}->deleteEntry($id);
+	return $id;
+}
+
+# ------------------------------------------
 sub refresh {
 # ------------------------------------------
 	my $obj = shift || return error('No Object');
 	my $redraw = shift;
+	
+	return unless($obj->Table_is_Change($obj->{last_refresh_time}));
 
 	unless(defined $obj->{tree_buttons}) {
 		my $c = -1;
@@ -138,9 +252,11 @@ sub refresh {
 	$obj->{tree}->configure(-command => $obj->{command})
 		if(defined $obj->{command} and ref $obj->{command} eq 'CODE');
 
+	
 
 	$obj->remember();
 	@{$obj->{ListOfAllEntries}} = ();
+	$obj->{Paths} = {};
 	$obj->{tree}->delete('all');
 	$obj->list();
 	$obj->{tree}->focus;
@@ -158,6 +274,7 @@ sub select_entrys {
 	my $obj = shift || return error('No Object');
 	$obj->{FoundEntrys} = shift || return $obj->{FoundEntrys};
 	$obj->color_all();
+	$obj->zoom if($obj->infozoom);	
 
 	unless(grep(/\:/, @{$obj->{FoundEntrys}})){
 		my @FoundEntrys;
@@ -174,8 +291,7 @@ sub select_entrys {
 	}		
 
 	foreach (@{$obj->{FoundEntrys}}) { 
-		return error(sprintf('Item <%s> doesnt exist!',$_))
-			unless($obj->{tree}->infoExists($_));
+		next unless($obj->{tree}->infoExists($_));
 		$obj->to_parent_open($_);
 		$obj->color_row($_, $obj->{highlight});
 	}
@@ -219,7 +335,9 @@ sub remember {
 	my $ret;
 	unless( $rem ) {
 		foreach my $entry (@{$obj->{ListOfAllEntries}}) {
-			my $mode = $obj->{tree}->getmode($entry);
+			my $mode = 'none';
+			$mode = $obj->{tree}->getmode($entry)
+				if($obj->{tree}->infoExists($entry));
 			$ret->{status}->{$entry} = $obj->{tree}->{status}->{$entry} = $mode
 				unless($mode eq 'none');
 		}
@@ -265,7 +383,6 @@ sub get_id {
 	$obj->{tree}->selectionSet($id);
 	my ($col, $col_nr) = $obj->x2col( $ev->x + $w->xview() );
 	my $wert = $w->itemCget($id, $col_nr, -text);
-
 	return ($id, $col, $col_nr, $wert);
 }
 
@@ -326,13 +443,14 @@ sub makeSql {
 # ------------------------------------------
 	my $obj = shift || return error('No Object');
 
-	my $sql = sprintf('select %s, %s, %s from %s %s ORDER BY %s, %s',
-			$obj->{idx}, $obj->{textcolumn},join(',', @{$obj->{fields}}),
+	my $sql = sprintf('select %s, %s, %s, %s from %s %s ORDER BY %s, %s',
+			$obj->{idx}, $obj->{textcolumn},join(',', @{$obj->{fields}}), $obj->{parent_id},
 			$obj->{table}, 
 			(defined $obj->{where} ? $obj->{where} : ''),
 			$obj->{parent_id}, $obj->{idx}
 			);
-	$obj->debug($sql);
+	$obj->debug($sql)
+		if($obj->{debug});
 	return $sql;
 }
 
@@ -374,6 +492,7 @@ sub list {
 
 	foreach my $id (sort @{$obj->{ListOfAllEntries}}) { 
 		my $item_id = (split( /:/, $id ))[-1];
+		$obj->{Paths}->{$item_id} = $id;
 		my $row = $DATA->{$item_id} || $DATA->{sprintf("%0${len}d", $item_id)};		
 		$obj->{tree}->add($id, 
 			-itemtype	=> 'imagetext', 
@@ -461,11 +580,47 @@ sub info {
 
 
 # ------------------------------------------
+sub getSqlArray {
+# ------------------------------------------
+	my $obj = shift or return error("No object");
+	my $sql = shift or return error('No Sql');
+	my $dbh = $obj->{dbh};
+
+	my $sth = $dbh->prepare($sql) or warn("$DBI::errstr - $sql");
+	$sth->execute or warn("$DBI::errstr - $sql");
+	return $sth->fetchall_arrayref;
+}
+
+# ------------------------------------------
+sub Table_is_Change {
+# ------------------------------------------
+	my $obj 	= shift or return error("No object");
+	my $lasttime	= shift || $obj->{last_refresh_time};	# No last time, first request!
+	my $table	= shift || $obj->{table};
+
+	my $dbh 	= $obj->{dbh};
+	my $ret = 0;
+
+	my $data = $dbh->selectall_hashref(sprintf("SHOW TABLE STATUS LIKE '%s'", $table),'Name')
+		or return $obj->debug($dbh->errstr);
+
+	my $unixtime = $obj->getSqlArray(sprintf("select UNIX_TIMESTAMP('%s')", $data->{$table}->{Update_time}));
+
+	$obj->{last_refresh_time} = time;
+
+	if($unixtime->[0][0] > $lasttime) {
+		return 1;
+	}
+}
+
+
+# ------------------------------------------
 sub debug {
 # ------------------------------------------
 	my $obj = shift;
 	my $msg = shift || return;
-	printf("\nInfo: %s\n", $msg); 
+	printf($msg, @_); 
+	print "\n";
 } 
 
 # ------------------------------------------
@@ -563,7 +718,7 @@ Callback on TreeWidget at browsing.
 
 =head2 -entry_create_cb => sub{ ... }
 
-Callback if a entry created. The routine have 2 parameters:
+Callback if an entry created. The routine have 2 parameters:
 
 =over 4
 
@@ -610,7 +765,26 @@ These are the methods you can use with this Widget.
 =head2 $DBITree->refresh('reload');
 
 Refresh the tree. if you call this method with the parameter reload 
-then this will reload the table from database.
+then this will reload the table from database. If you call this without parameter, then 
+look this widget is the table changed (update date) at the last refresh. If this true, then
+load this the complete table and redraw the tree.
+
+=head2 $DBITree->copy( I<entry>, I<to_parent_entry>, I<data> );
+
+Copy an entry (entry) to a parent branch (to_parent_entry) with data (data);
+
+=head2 $DBITree->move( I<entry>, I<to_parent_entry>, I<data> );
+
+Move an entry (from_entry) to a parent branch (to_parent_entry) with data (data);
+
+=head2 $DBITree->dele( I<entry> );
+
+Delete a entry.
+
+=head2 $DBITree->neu( I<entry>, I<to_parent_entry>, I<data> );
+
+Create a entry.
+
 
 =head2 $DBITree->close_all;
 
@@ -727,6 +901,15 @@ This is a (Resize)Button widget.
 =head1 CHANGES
 
   $Log: Tree.pm,v $
+  Revision 1.7  2003/06/16 12:58:01  xpix
+  ! No Error, if the id ot exists in selct_entrys
+
+  Revision 1.6  2003/05/23 13:47:46  xpix
+  ! No debug if debug = 0
+
+  Revision 1.5  2003/05/20 13:51:50  xpix
+  * add field parent_id to data entry
+
   Revision 1.4  2003/05/11 16:33:47  xpix
   * new option -colNames
   * new option -entry_create_cb

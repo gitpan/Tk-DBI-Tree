@@ -3,7 +3,7 @@ use ExtUtils::MakeMaker;
 WriteMakefile (
 	'NAME'		=> 'Tk::DBI::Tree',
 	'DISTNAME'	=> 'Tk-DBI-Tree',
-	'VERSION'	=> '0.02',
+	'VERSION'	=> '0.03',
 	'AUTHOR'	=> 'Frank Herrmann <xpix@netzwert.ag>',
 	'PREREQ_PM' 	=> { 	'Tk' => 0, 
 				'Tk::ResizeButton' => 0, 
